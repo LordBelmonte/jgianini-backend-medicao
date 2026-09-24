@@ -1,0 +1,22 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// PRISMA SCHEMA — jgianini-backend
+// Sistema de Medicao e Pagamento — Jgianini Esquadrias de Aluminio
+//
+// Referência: Documento 3 — Técnico de Banco de Dados
+// Banco     : PostgreSQL
+// ORM       : Prisma
+// Migrações : Prisma Migrate
+//
+// ATENÇÃO: Nesta etapa (Fundação) o schema contém apenas a configuração base.
+// As entidades de negócio (users, roles, works, contracts, measurements, etc.)
+// serão adicionadas na Etapa 2 — Banco de Dados, conforme Documento 3.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
