@@ -2,14 +2,17 @@
 // PRISMA SCHEMA — jgianini-backend
 // Sistema de Medicao e Pagamento — Jgianini Esquadrias de Aluminio
 //
-// Referência: Documento 3 — Técnico de Banco de Dados
-// Banco     : PostgreSQL
-// ORM       : Prisma
-// Migrações : Prisma Migrate
+// Referência : Documento 3 — Técnico de Banco de Dados
+// Banco       : PostgreSQL 16
+// ORM         : Prisma 5
+// Migrações   : Prisma Migrate
 //
-// ATENÇÃO: Nesta etapa (Fundação) o schema contém apenas a configuração base.
-// As entidades de negócio (users, roles, works, contracts, measurements, etc.)
-// serão adicionadas na Etapa 2 — Banco de Dados, conforme Documento 3.
+// Regras gerais:
+//   - UUID como chave primária estável (Doc3 §4)
+//   - snake_case para nomes de tabelas e campos (Doc3 §5)
+//   - Soft-delete via status/active — nunca DELETE físico em registros históricos (Doc3 §43)
+//   - DECIMAL para todos os valores financeiros e de área — NUNCA Float (Doc7 §56)
+//   - Timestamps em UTC (a ser configurado no servidor)
 // ─────────────────────────────────────────────────────────────────────────────
 
 generator client {
@@ -19,4 +22,776 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Unidades de medição dos serviços (Doc3 §15, Doc7 §3)
+enum ServiceUnit {
+  M2   // Metro quadrado — exige largura, altura, área
+  UN   // Unidade
+  DIA  // Diária
+}
+
+/// Status de uma obra (Doc3 §11)
+enum WorkStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Status de um contrato (Doc3 §16)
+enum ContractStatus {
+  ACTIVE
+  INACTIVE
+  CANCELLED
+}
+
+/// Status de um aditivo contratual (Doc3 §19)
+enum AdditiveStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Status de uma AL (Doc3 §22)
+enum AlStatus {
+  IMPORTED
+  PENDING_APPROVAL
+  APPROVED
+  CANCELLED
+}
+
+/// Status de uma medição — inclui fluxo normal e excepcional (Doc6 §4, §55, Doc2 §20)
+enum MeasurementStatus {
+  // Fluxo normal
+  DRAFT                          // Rascunho — editável pelo Empreiteiro
+  SUBMITTED                      // Enviada ao Fiscal
+  FISCAL_REVIEW                  // Em análise pelo Fiscal
+  RETURNED_TO_CONTRACTOR         // Devolvida ao Empreiteiro pelo Fiscal
+  FISCAL_APPROVED                // Aprovada pelo Fiscal — número gerado aqui
+  RESPONSIBLE_REVIEW             // Em análise pelo Responsável
+  RESPONSIBLE_APPROVED           // Aprovada pelo Responsável
+  COORDINATOR_REVIEW             // Em análise pelo Coordenador (ou devolvida pelo Diretor)
+  COORDINATOR_APPROVED           // Aprovada pelo Coordenador
+  DIRECTOR_REVIEW                // Em análise pelo Diretor
+  APPROVED                       // Aprovada definitivamente
+  CANCELLED                      // Cancelada — permanece no banco (soft-cancel)
+  // Fluxo excepcional (Doc6 §55 tabela excepcional, D-03)
+  DRAFT_EXCEPTIONAL              // Rascunho excepcional — criado pelo Coordenador
+  COORDINATOR_APPROVED_EXCEPTIONAL // Coordenador aprovou — número gerado aqui
+  // Estado de bloqueio por contestação (Doc6 §14)
+  FLOW_BLOCKED                   // Fluxo bloqueado por contestação aberta
+}
+
+/// Status financeiro consolidado de uma medição (Doc7 §52)
+enum FinancialStatus {
+  PENDING   // Nenhum pagamento realizado
+  PARTIAL   // Pagamento parcial
+  PAID      // Saldo zero — quitada
+  CANCELLED // Registro financeiro cancelado
+}
+
+/// Status de um pagamento individual (Doc3 §36)
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+/// Etapa do fluxo de aprovação (Doc3 §37)
+enum ApprovalStage {
+  FISCAL
+  RESPONSIBLE
+  COORDINATOR
+  DIRECTOR
+}
+
+/// Ação executada na aprovação (Doc3 §37)
+enum ApprovalAction {
+  APPROVE
+  RETURN
+  REJECT
+}
+
+/// Status de uma contestação do Empreiteiro (Doc6 §13-§16)
+enum ContestStatus {
+  OPEN
+  RESOLVED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USUÁRIOS, PERFIS E PERMISSÕES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Usuários do sistema (Doc3 §6)
+model users {
+  id            String   @id @default(uuid())
+  name          String
+  email         String   @unique
+  password_hash String
+  active        Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relacionamentos
+  user_roles                  user_roles[]
+  user_works                  user_works[]
+  approvals                   approvals[]
+  payments_created            payments[]                    @relation("payment_created_by")
+  payments_cancelled          payments[]                    @relation("payment_cancelled_by")
+  measurements_created        measurements[]                @relation("measurement_created_by")
+  measurements_cancelled      measurements[]                @relation("measurement_cancelled_by")
+  additives_created           contract_additives[]          @relation("additive_created_by")
+  additives_approved          contract_additives[]          @relation("additive_approved_by")
+  documents_uploaded          documents[]
+  audit_logs                  audit_logs[]
+  notifications               notifications[]
+  contests_created            contests[]                    @relation("contest_created_by")
+  contests_resolved           contests[]                    @relation("contest_resolved_by")
+  measurement_status_history  measurement_status_history[]
+  als_imported                als[]                         @relation("al_imported_by")
+  als_approved                als[]                         @relation("al_approved_by")
+
+  @@index([email])
+  @@index([active])
+  @@map("users")
+}
+
+/// Perfis/funções do sistema (Doc3 §7, Doc5 §3)
+model roles {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  active      Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  user_roles       user_roles[]
+  role_permissions role_permissions[]
+
+  @@index([active])
+  @@map("roles")
+}
+
+/// Permissões individuais granulares (Doc3 §8, Doc5 §38)
+model permissions {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  description String?
+  created_at  DateTime @default(now())
+
+  role_permissions role_permissions[]
+
+  @@map("permissions")
+}
+
+/// Vínculo usuário ↔ perfil (Doc3 §9)
+model user_roles {
+  user_id String
+  role_id String
+
+  user users @relation(fields: [user_id], references: [id])
+  role roles @relation(fields: [role_id], references: [id])
+
+  @@id([user_id, role_id])
+  @@map("user_roles")
+}
+
+/// Vínculo perfil ↔ permissão (Doc3 §10)
+model role_permissions {
+  role_id       String
+  permission_id String
+
+  role       roles       @relation(fields: [role_id], references: [id])
+  permission permissions @relation(fields: [permission_id], references: [id])
+
+  @@id([role_id, permission_id])
+  @@map("role_permissions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OBRAS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Obras (Doc3 §11)
+model works {
+  id          String     @id @default(uuid())
+  code        String     @unique
+  name        String
+  client_name String
+  address     String?
+  status      WorkStatus @default(ACTIVE)
+  created_at  DateTime   @default(now())
+  updated_at  DateTime   @updatedAt
+
+  user_works       user_works[]
+  work_contractors work_contractors[]
+  contracts        contracts[]
+  als              als[]
+  measurements     measurements[]
+
+  @@index([code])
+  @@index([status])
+  @@map("works")
+}
+
+/// Vínculo usuário ↔ obra — usado também para autorização (Doc3 §12)
+model user_works {
+  user_id String
+  work_id String
+
+  user users @relation(fields: [user_id], references: [id])
+  work works @relation(fields: [work_id], references: [id])
+
+  @@id([user_id, work_id])
+  @@map("user_works")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPREITEIROS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Empreiteiros (Doc3 §13)
+model contractors {
+  id         String   @id @default(uuid())
+  name       String
+  document   String?
+  email      String?
+  phone      String?
+  active     Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  work_contractors work_contractors[]
+  contracts        contracts[]
+  al_contractors   al_contractors[]
+  measurements     measurements[]
+
+  @@index([document])
+  @@index([active])
+  @@map("contractors")
+}
+
+/// Vínculo obra ↔ empreiteiro (Doc3 §14)
+model work_contractors {
+  work_id       String
+  contractor_id String
+  active        Boolean  @default(true)
+  created_at    DateTime @default(now())
+
+  work       works       @relation(fields: [work_id], references: [id])
+  contractor contractors @relation(fields: [contractor_id], references: [id])
+
+  @@id([work_id, contractor_id])
+  @@map("work_contractors")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVIÇOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Serviços que podem ser medidos (Doc3 §15)
+model services {
+  id          String      @id @default(uuid())
+  code        String      @unique
+  name        String
+  unit        ServiceUnit
+  requires_al Boolean     @default(false)
+  active      Boolean     @default(true)
+  created_at  DateTime    @default(now())
+  updated_at  DateTime    @updatedAt
+
+  contract_services              contract_services[]
+  contract_additive_services     contract_additive_services[]
+  als                            als[]
+  measurement_items              measurement_items[]
+
+  @@index([code])
+  @@index([unit])
+  @@index([active])
+  @@map("services")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTRATOS E ADITIVOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Contratos (Doc3 §16)
+/// Nota: fora da validade NÃO bloqueia e NÃO gera alerta (Doc1 §19 — decisão deliberada)
+model contracts {
+  id                String         @id @default(uuid())
+  work_id           String
+  contractor_id     String
+  contract_number   String
+  start_date        DateTime?
+  end_date          DateTime?
+  retention_percent Decimal        @db.Decimal(5, 2)
+  status            ContractStatus @default(ACTIVE)
+  created_at        DateTime       @default(now())
+  updated_at        DateTime       @updatedAt
+
+  work       works       @relation(fields: [work_id], references: [id])
+  contractor contractors @relation(fields: [contractor_id], references: [id])
+
+  contract_services  contract_services[]
+  contract_additives contract_additives[]
+  als                als[]
+  measurements       measurements[]
+
+  @@index([work_id])
+  @@index([contractor_id])
+  @@index([status])
+  @@map("contracts")
+}
+
+/// Serviços vinculados ao contrato — quantidade e preço contratados (Doc3 §17)
+/// Preço histórico: o item da medição congela o preço aplicado (Doc3 §18, Doc7 §57)
+model contract_services {
+  id            String   @id @default(uuid())
+  contract_id   String
+  service_id    String
+  quantity      Decimal  @db.Decimal(15, 3)
+  unit_price    Decimal  @db.Decimal(15, 2)
+  active        Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  contract contracts @relation(fields: [contract_id], references: [id])
+  service  services  @relation(fields: [service_id], references: [id])
+
+  @@index([contract_id])
+  @@index([service_id])
+  @@map("contract_services")
+}
+
+/// Aditivos contratuais (Doc3 §19)
+model contract_additives {
+  id               String         @id @default(uuid())
+  contract_id      String
+  version_number   Int
+  reason           String
+  status           AdditiveStatus @default(DRAFT)
+  created_by       String
+  approved_by      String?
+  created_at       DateTime       @default(now())
+  approved_at      DateTime?
+  rejected_at      DateTime?
+  rejection_reason String?
+
+  contract contracts @relation(fields: [contract_id], references: [id])
+  creator  users     @relation("additive_created_by", fields: [created_by], references: [id])
+  approver users?    @relation("additive_approved_by", fields: [approved_by], references: [id])
+
+  contract_additive_services contract_additive_services[]
+
+  @@index([contract_id])
+  @@index([status])
+  @@map("contract_additives")
+}
+
+/// Alterações de serviço registradas em cada aditivo — preserva histórico de versionamento (Doc3 §20)
+model contract_additive_services {
+  id              String   @id @default(uuid())
+  additive_id     String
+  service_id      String
+  quantity_change Decimal? @db.Decimal(15, 3)
+  new_unit_price  Decimal? @db.Decimal(15, 2)
+  created_at      DateTime @default(now())
+
+  additive contract_additives @relation(fields: [additive_id], references: [id])
+  service  services            @relation(fields: [service_id], references: [id])
+
+  @@index([additive_id])
+  @@map("contract_additive_services")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALs — AUTORIZAÇÕES DE LANÇAMENTO
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// ALs — Autorizações de Lançamento (Doc3 §21)
+/// Saldo = quantity - Σ consumos válidos (nunca armazenar como única fonte de verdade — Doc3 §49)
+model als {
+  id                  String   @id @default(uuid())
+  work_id             String
+  contract_id         String?
+  service_id          String?
+  code                String
+  description         String?
+  quantity            Decimal  @db.Decimal(15, 3)
+  status              AlStatus @default(IMPORTED)
+  imported_by         String?
+  approved_by         String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  approved_at         DateTime?
+  cancelled_at        DateTime?
+  cancellation_reason String?
+
+  work     works      @relation(fields: [work_id], references: [id])
+  contract contracts? @relation(fields: [contract_id], references: [id])
+  service  services?  @relation(fields: [service_id], references: [id])
+  importer users?     @relation("al_imported_by", fields: [imported_by], references: [id])
+  approver users?     @relation("al_approved_by", fields: [approved_by], references: [id])
+
+  al_contractors    al_contractors[]
+  measurement_items measurement_items[]
+  productions       productions[]
+  reworks           reworks[]
+
+  @@index([work_id])
+  @@index([contract_id])
+  @@index([status])
+  @@index([code])
+  @@map("als")
+}
+
+/// Restrição de AL por empreiteiro (Doc3 §23, Doc5 §15)
+model al_contractors {
+  al_id         String
+  contractor_id String
+
+  al         als         @relation(fields: [al_id], references: [id])
+  contractor contractors @relation(fields: [contractor_id], references: [id])
+
+  @@id([al_id, contractor_id])
+  @@map("al_contractors")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEDIÇÕES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Medições (Doc3 §25)
+/// number: nullable — gerado na aprovação do Fiscal (normal) ou Coordenador (excepcional) (D-01)
+/// is_exceptional: fluxo reduzido Coordenador → Diretor, sem Fiscal/Responsável (D-03)
+model measurements {
+  id                  String            @id @default(uuid())
+  number              String?           @unique
+  work_id             String
+  contractor_id       String
+  contract_id         String?
+  status              MeasurementStatus @default(DRAFT)
+  is_exceptional      Boolean           @default(false)
+  exceptional_reason  String?
+  competence_month    String
+  created_by          String
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+  submitted_at        DateTime?
+  approved_at         DateTime?
+  cancelled_at        DateTime?
+  cancellation_reason String?
+  cancelled_by        String?
+
+  work       works        @relation(fields: [work_id], references: [id])
+  contractor contractors  @relation(fields: [contractor_id], references: [id])
+  contract   contracts?   @relation(fields: [contract_id], references: [id])
+  creator    users        @relation("measurement_created_by", fields: [created_by], references: [id])
+  canceller  users?       @relation("measurement_cancelled_by", fields: [cancelled_by], references: [id])
+
+  measurement_items          measurement_items[]
+  measurement_financial      measurement_financials?
+  payments                   payments[]
+  approvals                  approvals[]
+  reworks                    reworks[]
+  measurement_status_history measurement_status_history[]
+  contests                   contests[]
+
+  @@index([work_id])
+  @@index([contractor_id])
+  @@index([contract_id])
+  @@index([status])
+  @@index([number])
+  @@index([is_exceptional])
+  @@index([competence_month])
+  @@map("measurements")
+}
+
+/// Itens de uma medição (Doc3 §27)
+/// width_mm, height_mm: inteiros em milímetros, somente para M2 (Doc7 §4)
+/// area_m2: Decimal(15,3) calculado pelo backend — (width_mm * height_mm) / 1.000.000 (Doc7 §6)
+/// unit_price: congelado no momento do envio — alterações contratuais não afetam retroativamente (Doc7 §57)
+model measurement_items {
+  id             String   @id @default(uuid())
+  measurement_id String
+  service_id     String
+  al_id          String?
+  description    String?
+  width_mm       Int?
+  height_mm      Int?
+  area_m2        Decimal? @db.Decimal(15, 3)
+  quantity       Decimal  @db.Decimal(15, 3)
+  unit_price     Decimal  @db.Decimal(15, 2)
+  total_value    Decimal  @db.Decimal(15, 2)
+  created_at     DateTime @default(now())
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+  service     services     @relation(fields: [service_id], references: [id])
+  al          als?         @relation(fields: [al_id], references: [id])
+
+  productions productions[]
+  reworks     reworks[]
+
+  @@index([measurement_id])
+  @@index([service_id])
+  @@index([al_id])
+  @@map("measurement_items")
+}
+
+/// Produção normal vinculada a AL — consome saldo (Doc3 §24)
+/// Retrabalho NÃO está aqui — tem tabela própria (Doc3 §31)
+model productions {
+  id                  String   @id @default(uuid())
+  measurement_item_id String
+  al_id               String
+  quantity            Decimal  @db.Decimal(15, 3)
+  created_at          DateTime @default(now())
+
+  measurement_item measurement_items @relation(fields: [measurement_item_id], references: [id])
+  al               als               @relation(fields: [al_id], references: [id])
+
+  @@index([measurement_item_id])
+  @@index([al_id])
+  @@map("productions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RETRABALHO
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Motivos padronizados de retrabalho (Doc3 §32, Doc5 §27, Doc7 §37)
+model rework_reasons {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  description String
+  active      Boolean  @default(true)
+  created_at  DateTime @default(now())
+
+  reworks reworks[]
+
+  @@map("rework_reasons")
+}
+
+/// Retrabalho — estrutura separada da produção normal (Doc3 §31)
+/// NÃO consome saldo normal do AL (Doc7 §34, §60)
+/// original_al_id nullable — retrabalho pode existir sem AL (Doc7 §38)
+model reworks {
+  id                  String   @id @default(uuid())
+  measurement_id      String
+  measurement_item_id String?
+  original_al_id      String?
+  reason_id           String
+  quantity            Decimal  @db.Decimal(15, 3)
+  unit_price          Decimal  @db.Decimal(15, 2)
+  total_value         Decimal  @db.Decimal(15, 2)
+  description         String?
+  created_at          DateTime @default(now())
+
+  measurement      measurements      @relation(fields: [measurement_id], references: [id])
+  measurement_item measurement_items? @relation(fields: [measurement_item_id], references: [id])
+  original_al      als?              @relation(fields: [original_al_id], references: [id])
+  reason           rework_reasons    @relation(fields: [reason_id], references: [id])
+
+  @@index([measurement_id])
+  @@index([original_al_id])
+  @@map("reworks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINANCEIRO E PAGAMENTOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resumo financeiro da medição — relação 1:1 (Doc3 §33)
+/// retention_percent preservado historicamente — protege contra alterações futuras no contrato (Doc3 §34)
+/// net_amount >= 0 sempre (Doc7 §46)
+/// gross_amount = Σ itens normais + Σ retrabalhos (Doc7 §65)
+model measurement_financials {
+  id               String          @id @default(uuid())
+  measurement_id   String          @unique
+  gross_amount     Decimal         @db.Decimal(15, 2)
+  retention_percent Decimal        @db.Decimal(5, 2)
+  retention_amount Decimal         @db.Decimal(15, 2)
+  advance_amount   Decimal         @default(0) @db.Decimal(15, 2)
+  discount_amount  Decimal         @default(0) @db.Decimal(15, 2)
+  net_amount       Decimal         @db.Decimal(15, 2)
+  paid_amount      Decimal         @default(0) @db.Decimal(15, 2)
+  remaining_amount Decimal         @db.Decimal(15, 2)
+  financial_status FinancialStatus @default(PENDING)
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+
+  @@map("measurement_financials")
+}
+
+/// Pagamentos individuais — uma medição pode ter vários (Doc3 §35)
+/// Pagamento cancelado permanece no banco — soft-cancel (Doc3 §51)
+/// Perfis que podem cancelar medição (não pagamento): RESPONSIBLE, COORDINATOR, DIRECTOR (D-02)
+model payments {
+  id                  String        @id @default(uuid())
+  measurement_id      String
+  amount              Decimal       @db.Decimal(15, 2)
+  status              PaymentStatus @default(PENDING)
+  payment_date        DateTime
+  created_by          String
+  created_at          DateTime      @default(now())
+  cancelled_at        DateTime?
+  cancellation_reason String?
+  cancelled_by        String?
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+  creator     users        @relation("payment_created_by", fields: [created_by], references: [id])
+  canceller   users?       @relation("payment_cancelled_by", fields: [cancelled_by], references: [id])
+
+  @@index([measurement_id])
+  @@index([status])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APROVAÇÕES E FLUXO
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Registro histórico de cada aprovação/devolução (Doc3 §37)
+model approvals {
+  id             String          @id @default(uuid())
+  measurement_id String
+  stage          ApprovalStage
+  action         ApprovalAction
+  user_id        String
+  reason         String?
+  observation    String?
+  created_at     DateTime        @default(now())
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+  user        users         @relation(fields: [user_id], references: [id])
+
+  @@index([measurement_id])
+  @@index([stage])
+  @@index([action])
+  @@map("approvals")
+}
+
+/// Histórico completo de transições de status da medição (Doc6 §58)
+model measurement_status_history {
+  id              String            @id @default(uuid())
+  measurement_id  String
+  previous_status MeasurementStatus
+  action          String
+  new_status      MeasurementStatus
+  user_id         String
+  reason          String?
+  observation     String?
+  created_at      DateTime          @default(now())
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+  user        users         @relation(fields: [user_id], references: [id])
+
+  @@index([measurement_id])
+  @@index([user_id])
+  @@map("measurement_status_history")
+}
+
+/// Contestações do Empreiteiro — bloqueiam o fluxo (Doc6 §13-§16, Doc2 §23)
+model contests {
+  id             String        @id @default(uuid())
+  measurement_id String
+  created_by     String
+  reason         String
+  description    String?
+  status         ContestStatus @default(OPEN)
+  resolved_by    String?
+  resolution     String?
+  resolved_at    DateTime?
+  created_at     DateTime      @default(now())
+
+  measurement measurements @relation(fields: [measurement_id], references: [id])
+  creator     users        @relation("contest_created_by", fields: [created_by], references: [id])
+  resolver    users?       @relation("contest_resolved_by", fields: [resolved_by], references: [id])
+
+  @@index([measurement_id])
+  @@index([status])
+  @@map("contests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENTOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Documentos anexados a registros do sistema (Doc3 §38-§39)
+/// Estratégia polimórfica: entity_type + entity_id (decisão técnica — Doc3 §39)
+/// Documento substituído: active = false, replaced_by preenchido — permanece no banco (Doc3 §43)
+model documents {
+  id          String   @id @default(uuid())
+  file_name   String
+  file_path   String
+  mime_type   String
+  file_size   BigInt
+  uploaded_by String
+  version     Int      @default(1)
+  active      Boolean  @default(true)
+  entity_type String
+  entity_id   String
+  replaced_by String?
+  created_at  DateTime @default(now())
+
+  uploader     users      @relation(fields: [uploaded_by], references: [id])
+  replaced_doc documents? @relation("document_replaced_by", fields: [replaced_by], references: [id])
+  replacements documents[] @relation("document_replaced_by")
+
+  @@index([entity_type, entity_id])
+  @@index([active])
+  @@map("documents")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDITORIA E NOTIFICAÇÕES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Auditoria de negócio — imutável, nunca pode ser apagada (Doc3 §40-§41, Doc5 §47)
+/// user_id nullable para operações do sistema sem usuário explícito
+model audit_logs {
+  id          String   @id @default(uuid())
+  user_id     String?
+  action      String
+  entity_type String
+  entity_id   String
+  old_values  Json?
+  new_values  Json?
+  metadata    Json?
+  created_at  DateTime @default(now())
+
+  user users? @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([entity_type, entity_id])
+  @@index([action])
+  @@index([created_at])
+  @@map("audit_logs")
+}
+
+/// Notificações internas do sistema (Doc3 §42)
+model notifications {
+  id          String   @id @default(uuid())
+  user_id     String
+  type        String
+  title       String
+  message     String
+  entity_type String?
+  entity_id   String?
+  read_at     DateTime?
+  created_at  DateTime @default(now())
+
+  user users @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([read_at])
+  @@map("notifications")
 }
