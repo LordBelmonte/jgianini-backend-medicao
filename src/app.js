@@ -3,7 +3,8 @@
 const express = require('express');
 
 const healthRoutes = require('./modules/health/health.routes');
-const notFound = require('./middlewares/notFound');
+const authRoutes   = require('./modules/auth/auth.routes');
+const notFound     = require('./middlewares/notFound');
 const errorHandler = require('./middlewares/errorHandler');
 
 const app = express();
@@ -18,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 // ROTAS
 // ─────────────────────────────────────────
 app.use('/api/health', healthRoutes);
+app.use('/api/auth',   authRoutes);   // login, me, logout — DT-01 JWT Stateless
 
 // ─────────────────────────────────────────
 // 404 — deve vir após todas as rotas

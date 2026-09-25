@@ -19,8 +19,10 @@
   "private": true,
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "bcryptjs": "2.4.3",
     "dotenv": "16.4.7",
-    "express": "4.22.3"
+    "express": "4.22.3",
+    "jsonwebtoken": "9.0.2"
   },
   "devDependencies": {
     "nodemon": "3.1.9",
