@@ -7,6 +7,7 @@ const authRoutes        = require('./modules/auth/auth.routes');
 const usersRoutes       = require('./modules/users/users.routes');
 const worksRoutes       = require('./modules/works/works.routes');
 const contractorsRoutes = require('./modules/contractors/contractors.routes');
+const servicesRoutes    = require('./modules/services/services.routes');
 const notFound          = require('./middlewares/notFound');
 const errorHandler = require('./middlewares/errorHandler');
 
@@ -22,10 +23,11 @@ app.use(express.urlencoded({ extended: true }));
 // ROTAS
 // ─────────────────────────────────────────
 app.use('/api/health',      healthRoutes);
-app.use('/api/auth',        authRoutes);         // login, me, logout — DT-01 JWT Stateless
-app.use('/api/users',       usersRoutes);        // CRUD de usuários — Etapa 4
-app.use('/api/works',       worksRoutes);        // CRUD de obras + vínculos — Etapa 5
-app.use('/api/contractors', contractorsRoutes);  // CRUD de empreiteiros — Etapa 6
+app.use('/api/auth',        authRoutes);
+app.use('/api/users',       usersRoutes);
+app.use('/api/works',       worksRoutes);
+app.use('/api/contractors', contractorsRoutes);
+app.use('/api/services',    servicesRoutes);  // dados estruturais — Etapa 7
 
 // ─────────────────────────────────────────
 // 404 — deve vir após todas as rotas
