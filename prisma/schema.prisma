@@ -257,10 +257,12 @@ model user_works {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Empreiteiros (Doc3 §13)
+/// document: opcional, único quando informado (P-04 A)
+/// PostgreSQL permite múltiplos NULL em colunas @unique — comportamento desejado
 model contractors {
   id         String   @id @default(uuid())
   name       String
-  document   String?
+  document   String?  @unique
   email      String?
   phone      String?
   active     Boolean  @default(true)
@@ -272,7 +274,6 @@ model contractors {
   al_contractors   al_contractors[]
   measurements     measurements[]
 
-  @@index([document])
   @@index([active])
   @@map("contractors")
 }
