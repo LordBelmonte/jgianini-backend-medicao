@@ -135,10 +135,12 @@ model users {
   email         String   @unique
   password_hash String
   active        Boolean  @default(true)
+  contractor_id String?  // FK → contractors.id — null para usuários internos (decisão: 1 user → 0-1 contractor)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   // Relacionamentos
+  contractor                  contractors?                  @relation(fields: [contractor_id], references: [id], onDelete: SetNull)
   user_roles                  user_roles[]
   user_works                  user_works[]
   approvals                   approvals[]
@@ -159,6 +161,7 @@ model users {
 
   @@index([email])
   @@index([active])
+  @@index([contractor_id])
   @@map("users")
 }
 
@@ -269,6 +272,8 @@ model contractors {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  // Relação inversa: um empreiteiro pode ter N usuários (decisão: 1 contractor → N users)
+  users            users[]
   work_contractors work_contractors[]
   contracts        contracts[]
   al_contractors   al_contractors[]

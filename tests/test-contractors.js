@@ -41,9 +41,9 @@ const app    = require('../src/app');
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 let server, port;
-let adminToken, coordToken, fiscalToken;
-let adminId, coordId, fiscalId;
-let adminRoleId, coordRoleId, fiscalRoleId;
+let adminToken, coordToken, fiscalToken, contractorToken, contractor2Token;
+let adminId, coordId, fiscalId, contractorUserId, contractor2UserId;
+let adminRoleId, coordRoleId, fiscalRoleId, contractorRoleId;
 let testWorkId;
 let createdContractorId, contractor2Id;
 
@@ -79,14 +79,16 @@ function assert(condition, message) {
 // ─── setup ───────────────────────────────────────────────────────────────────
 
 async function setup() {
-  const [adminRole, coordRole, fiscalRole] = await Promise.all([
+  const [adminRole, coordRole, fiscalRole, contractorRole] = await Promise.all([
     prisma.roles.findUnique({ where: { name: 'ADMIN' } }),
     prisma.roles.findUnique({ where: { name: 'COORDINATOR' } }),
     prisma.roles.findUnique({ where: { name: 'FISCAL' } }),
+    prisma.roles.findUnique({ where: { name: 'CONTRACTOR' } }),
   ]);
-  adminRoleId = adminRole.id;
-  coordRoleId = coordRole.id;
-  fiscalRoleId = fiscalRole.id;
+  adminRoleId      = adminRole.id;
+  coordRoleId      = coordRole.id;
+  fiscalRoleId     = fiscalRole.id;
+  contractorRoleId = contractorRole.id;
 
   // Permissões de empreiteiros
   const permCodes = ['contractors.view', 'contractors.create', 'contractors.update'];
@@ -111,6 +113,11 @@ async function setup() {
     where:  { role_id_permission_id: { role_id: fiscalRoleId, permission_id: viewPerm.id } },
     update: {}, create: { role_id: fiscalRoleId, permission_id: viewPerm.id },
   });
+  // CONTRACTOR também precisa de contractors.view para consultar os próprios dados (Doc5 §4.6)
+  await prisma.role_permissions.upsert({
+    where:  { role_id_permission_id: { role_id: contractorRoleId, permission_id: viewPerm.id } },
+    update: {}, create: { role_id: contractorRoleId, permission_id: viewPerm.id },
+  });
 
   // Obras também precisam de permissão no works.view para o fiscal
   const worksViewPerm = await prisma.permissions.findUnique({ where: { code: 'works.view' } });
@@ -123,17 +130,27 @@ async function setup() {
 
   // Criar usuários de teste
   const hash = await bcrypt.hash('Test@Contr123', 12);
-  const [admin, coord, fiscal] = await Promise.all([
-    prisma.users.create({ data: { name: '__CONTR_ADMIN__', email: 'cadmin@contr.test', password_hash: hash, active: true } }),
-    prisma.users.create({ data: { name: '__CONTR_COORD__', email: 'ccoord@contr.test', password_hash: hash, active: true } }),
-    prisma.users.create({ data: { name: '__CONTR_FISCAL__', email: 'cfiscal@contr.test', password_hash: hash, active: true } }),
+  const [admin, coord, fiscal, contractorUser, contractor2User] = await Promise.all([
+    prisma.users.create({ data: { name: '__CONTR_ADMIN__',   email: 'cadmin@contr.test',    password_hash: hash, active: true } }),
+    prisma.users.create({ data: { name: '__CONTR_COORD__',   email: 'ccoord@contr.test',    password_hash: hash, active: true } }),
+    prisma.users.create({ data: { name: '__CONTR_FISCAL__',  email: 'cfiscal@contr.test',   password_hash: hash, active: true } }),
+    // Usuário CONTRACTOR sem contractor_id ainda (será vinculado após criar empreiteiro)
+    prisma.users.create({ data: { name: '__CONTR_USER1__',   email: 'cuser1@contr.test',    password_hash: hash, active: true } }),
+    // Segundo usuário do mesmo empreiteiro (para testar múltiplos usuários)
+    prisma.users.create({ data: { name: '__CONTR_USER2__',   email: 'cuser2@contr.test',    password_hash: hash, active: true } }),
   ]);
-  adminId = admin.id; coordId = coord.id; fiscalId = fiscal.id;
+  adminId          = admin.id;
+  coordId          = coord.id;
+  fiscalId         = fiscal.id;
+  contractorUserId = contractorUser.id;
+  contractor2UserId = contractor2User.id;
 
   await Promise.all([
-    prisma.user_roles.create({ data: { user_id: adminId,  role_id: adminRoleId  } }),
-    prisma.user_roles.create({ data: { user_id: coordId,  role_id: coordRoleId  } }),
-    prisma.user_roles.create({ data: { user_id: fiscalId, role_id: fiscalRoleId } }),
+    prisma.user_roles.create({ data: { user_id: adminId,           role_id: adminRoleId      } }),
+    prisma.user_roles.create({ data: { user_id: coordId,           role_id: coordRoleId      } }),
+    prisma.user_roles.create({ data: { user_id: fiscalId,          role_id: fiscalRoleId     } }),
+    prisma.user_roles.create({ data: { user_id: contractorUserId,  role_id: contractorRoleId } }),
+    prisma.user_roles.create({ data: { user_id: contractor2UserId, role_id: contractorRoleId } }),
   ]);
 
   // Criar obra de teste
@@ -148,20 +165,22 @@ async function setup() {
   });
 
   // Tokens
-  const [rA, rC, rF] = await Promise.all([
+  const [rA, rC, rF, rCU] = await Promise.all([
     request('POST', '/api/auth/login', { email: 'cadmin@contr.test',  password: 'Test@Contr123' }),
     request('POST', '/api/auth/login', { email: 'ccoord@contr.test',  password: 'Test@Contr123' }),
     request('POST', '/api/auth/login', { email: 'cfiscal@contr.test', password: 'Test@Contr123' }),
+    request('POST', '/api/auth/login', { email: 'cuser1@contr.test',  password: 'Test@Contr123' }),
   ]);
-  adminToken = rA.body.data.token;
-  coordToken = rC.body.data.token;
-  fiscalToken = rF.body.data.token;
+  adminToken      = rA.body.data.token;
+  coordToken      = rC.body.data.token;
+  fiscalToken     = rF.body.data.token;
+  contractorToken = rCU.body.data.token; // CONTRACTOR sem contractor_id ainda
 }
 
 // ─── teardown ────────────────────────────────────────────────────────────────
 
 async function teardown() {
-  const ids = [adminId, coordId, fiscalId].filter(Boolean);
+  const ids = [adminId, coordId, fiscalId, contractorUserId, contractor2UserId].filter(Boolean);
 
   // Limpar empreiteiros criados nos testes
   const testContractors = await prisma.contractors.findMany({
@@ -277,8 +296,9 @@ async function runTests() {
     assert(r.body.pagination.total >= 2, 'deve ter pelo menos 2 empreiteiros');
   });
 
-  await test('T10 — Fiscal sem obra vinculada lista → lista vazia', async () => {
-    const r = await request('GET', '/api/contractors', null, fiscalToken);
+  await test('T10 — CONTRACTOR sem contractor_id lista → lista vazia', async () => {
+    // contractorToken pertence a um usuário sem contractor_id vinculado
+    const r = await request('GET', '/api/contractors', null, contractorToken);
     assert(r.status === 200, `esperado 200, recebido ${r.status}`);
     assert(r.body.pagination.total === 0, `esperado 0, recebido ${r.body.pagination.total}`);
   });
@@ -410,6 +430,54 @@ async function runTests() {
       where: { entity_id: createdContractorId, action: 'DISABLE_CONTRACTOR' },
     });
     assert(log !== null, 'log DISABLE_CONTRACTOR não encontrado');
+  });
+
+  // ─── NOVOS: relação user↔contractor (1:N) ──────────────────────────────────
+
+  await test('T27 — CONTRACTOR com contractor_id vinculado vê somente o próprio', async () => {
+    // Vincular contractorUserId ao createdContractorId
+    await prisma.users.update({ where: { id: contractorUserId }, data: { contractor_id: createdContractorId } });
+    // Renovar token após vinculação (contractor_id agora está no banco)
+    const rLogin = await request('POST', '/api/auth/login', { email: 'cuser1@contr.test', password: 'Test@Contr123' });
+    contractorToken = rLogin.body.data.token;
+
+    const r = await request('GET', '/api/contractors', null, contractorToken);
+    assert(r.status === 200, `esperado 200, recebido ${r.status}`);
+    assert(r.body.pagination.total === 1, `esperado 1, recebido ${r.body.pagination.total}`);
+    assert(r.body.data[0].id === createdContractorId, 'deve retornar somente o empreiteiro vinculado');
+  });
+
+  await test('T28 — Múltiplos usuários apontam para o mesmo empreiteiro (1 contractor → N users)', async () => {
+    // Vincular contractor2UserId ao mesmo empreiteiro
+    await prisma.users.update({ where: { id: contractor2UserId }, data: { contractor_id: createdContractorId } });
+    const rLogin2 = await request('POST', '/api/auth/login', { email: 'cuser2@contr.test', password: 'Test@Contr123' });
+    contractor2Token = rLogin2.body.data.token;
+
+    // Ambos os usuários enxergam o mesmo empreiteiro
+    const r1 = await request('GET', '/api/contractors', null, contractorToken);
+    const r2 = await request('GET', '/api/contractors', null, contractor2Token);
+    assert(r1.body.data[0].id === createdContractorId, 'usuário 1 deve ver o empreiteiro correto');
+    assert(r2.body.data[0].id === createdContractorId, 'usuário 2 deve ver o mesmo empreiteiro');
+
+    // Confirmar no banco: 2 usuários apontam para o mesmo contractor_id
+    const count = await prisma.users.count({ where: { contractor_id: createdContractorId } });
+    assert(count === 2, `esperado 2 usuários vinculados, encontrado ${count}`);
+  });
+
+  await test('T29 — Usuário com contractor_id não consegue operar como outro empreiteiro', async () => {
+    // contractorToken está vinculado a createdContractorId
+    // Tentar buscar contractor2Id (empreiteiro diferente) deve ser bloqueado
+    const r = await request('GET', `/api/contractors/${contractor2Id}`, null, contractorToken);
+    assert(r.status === 403, `esperado 403, recebido ${r.status}`);
+    assert(r.body.error.code === 'FORBIDDEN', `code: ${r.body.error.code}`);
+  });
+
+  await test('T30 — Usuário interno (Fiscal) não possui contractor_id em req.user', async () => {
+    // O fiscal deve listar normalmente — contractor_id null não quebra o fluxo
+    const r = await request('GET', '/api/contractors', null, fiscalToken);
+    assert(r.status === 200, `esperado 200, recebido ${r.status}`);
+    // Fiscal sem obra vinculada → lista vazia (comportamento correto)
+    assert(r.body.pagination.total === 0, `esperado 0, recebido ${r.body.pagination.total}`);
   });
 
   console.log(`\n=== RESULTADO: ${passed} passaram | ${failed} falharam ===`);

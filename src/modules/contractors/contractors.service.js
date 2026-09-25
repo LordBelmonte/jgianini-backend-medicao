@@ -69,15 +69,9 @@ async function assertExists(id) {
 async function canAccessContractor(actor, contractorId) {
   if (actor.roles.includes('ADMIN') || actor.roles.includes('DIRECTOR')) return true;
 
+  // CONTRACTOR: acessa somente o empreiteiro ao qual está vinculado (via banco — imutável pelo frontend)
   if (actor.roles.includes('CONTRACTOR')) {
-    return actor.id === contractorId ||
-      // Empreiteiro acessa pelo vínculo de contractors.id — mas req.user.id é o user.id
-      // O contractor pode ser buscado via measurements mas aqui verificamos se o próprio usuário
-      // é esse empreiteiro — essa ligação usuário↔empreiteiro ainda não existe na arquitetura
-      // (será tratada quando o módulo de auth do empreiteiro for finalizado).
-      // Por ora, o CONTRACTOR só acessa registros da tabela contractors que correspondam
-      // ao seu próprio registro, quando vinculado. Sem esse vínculo, retorna false.
-      false;
+    return actor.contractor_id !== null && actor.contractor_id === contractorId;
   }
 
   // COORDINATOR / FISCAL / RESPONSIBLE: verificar se o empreiteiro está em alguma obra do ator
@@ -129,11 +123,19 @@ async function listContractors(params, actor) {
     return repo.findMany({ ...params, contractorIds: null });
   }
 
-  // CONTRACTOR: somente os próprios dados
-  // O vínculo user↔contractor será resolvido quando os empreiteiros tiverem usuário próprio.
-  // Por ora, retorna lista vazia para CONTRACTOR sem vínculo explícito.
+  // CONTRACTOR: somente os próprios dados via contractor_id do token (fonte confiável)
+  // O contractor_id vem de req.user (carregado do banco pelo authenticate.js)
+  // Nunca aceitar contractor_id enviado pelo frontend — risco de falsificação de identidade
   if (actor.roles.includes('CONTRACTOR')) {
-    return { data: [], pagination: { page: 1, limit: 1, total: 0, totalPages: 0 } };
+    if (!actor.contractor_id) {
+      // Usuário com perfil CONTRACTOR sem empreiteiro vinculado — estado de dados incompletos
+      return { data: [], pagination: { page: params.page || 1, limit: params.limit || 20, total: 0, totalPages: 0 } };
+    }
+    const c = await repo.findById(actor.contractor_id);
+    return {
+      data:       c ? [formatContractor(c)] : [],
+      pagination: { page: 1, limit: 1, total: c ? 1 : 0, totalPages: c ? 1 : 0 },
+    };
   }
 
   // COORDINATOR / FISCAL / RESPONSIBLE: somente empreiteiros das obras vinculadas

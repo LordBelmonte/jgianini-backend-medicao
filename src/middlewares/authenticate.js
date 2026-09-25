@@ -110,10 +110,13 @@ async function authenticate(req, res, next) {
     ];
 
     req.user = {
-      id:          user.id,
-      name:        user.name,
-      email:       user.email,
-      active:      user.active,
+      id:            user.id,
+      name:          user.name,
+      email:         user.email,
+      active:        user.active,
+      // contractor_id vem do banco (fonte confiável) — nunca do frontend
+      // null para usuários internos (Admin, Fiscal, Coordinator, etc.)
+      contractor_id: user.contractor_id ?? null,
       roles,
       permissions,
     };
