@@ -302,6 +302,7 @@ async function runTests() {
         contract_number:  '__SVC_CONTRACT__',
         retention_percent: retentionPercent,
         status:           'ACTIVE',
+        created_by:       adminId,   // Etapa 8: campo obrigatório
         contract_services: {
           create: [
             { service_id: svcM2Id, quantity: 100, unit_price: 120 },

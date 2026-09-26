@@ -42,10 +42,15 @@ enum WorkStatus {
 }
 
 /// Status de um contrato (Doc3 §16)
+/// P-09 = B: DRAFT, ACTIVE, SUSPENDED, CLOSED
+/// P-18 = A: DRAFT é editável e não pode gerar operações
+/// P-19 = A: SUSPENDED bloqueia novas medições/produção, mas permite consulta e correções
+/// P-20 = A: CLOSED bloqueia novas operações e mantém consulta histórica
 enum ContractStatus {
+  DRAFT
   ACTIVE
-  INACTIVE
-  CANCELLED
+  SUSPENDED
+  CLOSED
 }
 
 /// Status de um aditivo contratual (Doc3 §19)
@@ -158,6 +163,7 @@ model users {
   measurement_status_history  measurement_status_history[]
   als_imported                als[]                         @relation("al_imported_by")
   als_approved                als[]                         @relation("al_approved_by")
+  contracts_created           contracts[]                    @relation("contract_created_by")   // Etapa 8
 
   @@index([email])
   @@index([active])
@@ -329,6 +335,10 @@ model services {
 
 /// Contratos (Doc3 §16)
 /// Nota: fora da validade NÃO bloqueia e NÃO gera alerta (Doc1 §19 — decisão deliberada)
+/// CONFLITO-01 = A: fora da vigência bloqueia novas operações (prevalece sobre Doc1 §19)
+/// P-21 = B: contract_number único dentro da obra
+/// P-22 = A: campo de observações/notas
+/// P-25 = C: retenção pode ser alterada diretamente; alteração vale somente para medições futuras
 model contracts {
   id                String         @id @default(uuid())
   work_id           String
@@ -337,21 +347,26 @@ model contracts {
   start_date        DateTime?
   end_date          DateTime?
   retention_percent Decimal        @db.Decimal(5, 2)
-  status            ContractStatus @default(ACTIVE)
+  status            ContractStatus @default(DRAFT)   // P-18: DRAFT é editável e não pode gerar operações
+  notes             String?                           // P-22: observações opcionais
+  created_by        String                           // Padrão do sistema: quem criou o contrato
   created_at        DateTime       @default(now())
   updated_at        DateTime       @updatedAt
 
   work       works       @relation(fields: [work_id], references: [id])
   contractor contractors @relation(fields: [contractor_id], references: [id])
+  creator    users       @relation("contract_created_by", fields: [created_by], references: [id])
 
   contract_services  contract_services[]
   contract_additives contract_additives[]
   als                als[]
   measurements       measurements[]
 
+  @@unique([work_id, contract_number])   // P-21: único dentro da obra
   @@index([work_id])
   @@index([contractor_id])
   @@index([status])
+  @@index([created_by])
   @@map("contracts")
 }
 
