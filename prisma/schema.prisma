@@ -410,6 +410,7 @@ model contract_additives {
 
   contract_additive_services contract_additive_services[]
 
+  @@unique([contract_id, version_number])  // garante unicidade de versão por contrato (D-01)
   @@index([contract_id])
   @@index([status])
   @@map("contract_additives")
@@ -428,6 +429,7 @@ model contract_additive_services {
   service  services            @relation(fields: [service_id], references: [id])
 
   @@index([additive_id])
+  @@index([service_id])   // índice para consultas por serviço (análise pré-implementação §C)
   @@map("contract_additive_services")
 }
 
